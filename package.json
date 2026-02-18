@@ -1,0 +1,16 @@
+{
+  "name": "novacenter-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp con IA para Nova Center",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "@hapi/boom": "^10.0.1"
+  }
+}
