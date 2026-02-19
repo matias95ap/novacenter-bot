@@ -6,20 +6,18 @@
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
 const { Boom } = require('@hapi/boom')
+const qrcode = require('qrcode-terminal')
 
 // ─── CONFIGURACION ───────────────────────────────────────────
 const GROQ_API_KEY    = process.env.GROQ_API_KEY || 'TU_API_KEY_AQUI'
 const PRODUCTOS_URL   = 'https://matias95ap.github.io/novacenter/tienda/productos.json'
 const BASE_URL_TIENDA = 'https://www.novacenter.ar/tienda/?producto='
 const MAX_HISTORIAL   = 10
-const REFRESH_MINUTOS = 30   // cada cuántos minutos recarga los productos
+const REFRESH_MINUTOS = 30
 // ─────────────────────────────────────────────────────────────
 
-// Cache de productos en memoria
 let productos = []
 let ultimaActualizacion = null
-
-// Historial de conversaciones por número
 const conversaciones = {}
 
 // ─── CARGA DE PRODUCTOS DESDE GITHUB ─────────────────────────
@@ -34,20 +32,14 @@ async function cargarProductos() {
     console.log(`✅ ${productos.length} productos cargados (${ultimaActualizacion.toLocaleTimeString()})`)
   } catch (error) {
     console.error('❌ Error cargando productos:', error.message)
-    // Si falla y ya teníamos productos en memoria, seguimos con los anteriores
-    if (productos.length === 0) {
-      console.error('No hay productos en memoria. El bot puede no responder correctamente.')
-    }
   }
 }
 
 async function productosActualizados() {
-  // Recarga si pasaron más de REFRESH_MINUTOS o si no hay productos
   const ahora = new Date()
   const minutosDesdeUltima = ultimaActualizacion
     ? (ahora - ultimaActualizacion) / 1000 / 60
     : Infinity
-
   if (minutosDesdeUltima >= REFRESH_MINUTOS || productos.length === 0) {
     await cargarProductos()
   }
@@ -75,7 +67,6 @@ function linkProducto(codigo) {
 function buscarProductos(consulta, listado) {
   const palabras = consulta.toLowerCase().split(' ').filter(p => p.length > 2)
   if (palabras.length === 0) return []
-
   return listado
     .map(p => {
       const detalle = p.DETALLE.toLowerCase()
@@ -116,16 +107,12 @@ function generarResumenCatalogo(listado) {
 async function consultarIA(numeroTel, mensajeUsuario) {
   if (!conversaciones[numeroTel]) conversaciones[numeroTel] = []
 
-  // Obtener productos (recarga si hace falta)
   const listado = await productosActualizados()
-
-  // Buscar productos relevantes y armar contexto
   const encontrados = buscarProductos(mensajeUsuario, listado)
   const contextoProductos = encontrados.length > 0
     ? `\n\n📦 PRODUCTOS ENCONTRADOS (usá estos datos y links en tu respuesta):\n${formatearProductosParaIA(encontrados)}`
     : `\n\n📦 No encontré productos que coincidan con "${mensajeUsuario}" en el catálogo.`
 
-  // System prompt dinámico con el catálogo actualizado
   const systemPrompt = `Sos un asistente de ventas amigable de Nova Center, una tienda de accesorios tecnológicos en Argentina.
 Tu trabajo es ayudar a los clientes a encontrar productos, consultar precios, stock y ver el producto en la tienda online.
 
@@ -142,13 +129,11 @@ INSTRUCCIONES:
 CATEGORÍAS DISPONIBLES EN LA TIENDA:
 ${generarResumenCatalogo(listado)}`
 
-  // Agregar mensaje al historial
   conversaciones[numeroTel].push({
     role: 'user',
     content: mensajeUsuario + contextoProductos
   })
 
-  // Mantener solo los últimos N mensajes
   if (conversaciones[numeroTel].length > MAX_HISTORIAL) {
     conversaciones[numeroTel] = conversaciones[numeroTel].slice(-MAX_HISTORIAL)
   }
@@ -172,7 +157,6 @@ ${generarResumenCatalogo(listado)}`
     })
 
     const data = await response.json()
-
     if (data.error) {
       console.error('Error Groq:', data.error)
       return 'Disculpá, hubo un error. Escribinos directamente para ayudarte 🙏'
@@ -191,23 +175,32 @@ ${generarResumenCatalogo(listado)}`
 // ─── WHATSAPP BOT ────────────────────────────────────────────
 
 async function iniciarBot() {
-  // Carga inicial de productos antes de arrancar
   await cargarProductos()
 
   const { state, saveCreds } = await useMultiFileAuthState('auth_info')
 
   const sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true,
+    // printQRInTerminal eliminado - lo manejamos manualmente abajo
   })
 
   sock.ev.on('creds.update', saveCreds)
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+
+    // ── Mostrar QR cuando lo recibimos ──
+    if (qr) {
+      console.log('\n📱 ESCANEA ESTE QR CON WHATSAPP:\n')
+      qrcode.generate(qr, { small: true })
+      console.log('\n(WhatsApp → Configuración → Dispositivos vinculados → Vincular dispositivo)\n')
+    }
+
     if (connection === 'close') {
-      const debeReconectar = new Boom(lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut
+      const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
+      const debeReconectar = statusCode !== DisconnectReason.loggedOut
+
       if (debeReconectar) {
-        console.log('🔄 Reconectando...')
+        console.log(`🔄 Reconectando... (código: ${statusCode})`)
         iniciarBot()
       } else {
         console.log('🔴 Sesión cerrada. Borrá la carpeta auth_info y volvé a ejecutar.')
